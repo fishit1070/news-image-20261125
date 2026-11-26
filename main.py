@@ -1,62 +1,74 @@
-"""Entry point for the news-image-20261125 submission.
+"""Entry point for the news-image-20261125 make.fun submission.
 
-Copies the shipped newspaper page image (``art.png``, stored next
-to this file) to ``entry.png`` in the output directory, verifies
-the copy by size and SHA-256, and repeats the copy under a temp
-name to prove both runs write identical bytes.
-Standard library only.
+Delivers the finished front-page image (art.png, stored beside this
+file) to the grader output directory as entry.png, verified by size
+and SHA-256, with a repeat copy to prove determinism. Standard
+library only.
 """
+
+from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Make the sibling module importable even under `python3 -P -s`,
+# where the script's own directory is not added to sys.path.
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 import copier
 
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
-def verify_dimensions(path: Path, expected: int = 1024) -> tuple[int, int]:
-    """Return the (width, height) of the PNG at ``path`` from its header.
 
-    Parses the 8-byte PNG signature and the IHDR chunk directly:
-    width and height are big-endian uint32 at byte offsets 16 and 20.
-    Exits non-zero unless the image is exactly ``expected`` square.
+def png_size(path) -> tuple[int, int]:
+    """Return the (width, height) of a PNG, requiring 1024x1024.
+
+    Reads only the first 24 bytes: the 8-byte PNG signature followed
+    by the IHDR chunk header, whose width and height fields are
+    big-endian uint32 values at byte offsets 16 and 20.
     """
-    with path.open("rb") as fh:
-        header = fh.read(24)
-    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
-        raise SystemExit(f"{path.name}: not a PNG file (bad signature)")
+    with Path(path).open("rb") as handle:
+        header = handle.read(24)
+
+    if len(header) < 24 or header[:8] != _PNG_SIGNATURE:
+        raise SystemExit(f"{path}: not a PNG file (bad signature)")
+
     width = int.from_bytes(header[16:20], "big")
     height = int.from_bytes(header[20:24], "big")
-    if (width, height) != (expected, expected):
+    if (width, height) != (1024, 1024):
         raise SystemExit(
-            f"{path.name}: expected {expected}x{expected}, got {width}x{height}"
+            f"{path}: expected 1024x1024 image, got {width}x{height}"
         )
     return width, height
 
 
 def main() -> None:
-    here = Path(__file__).resolve().parent
-    source = here / "art.png"
-    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
-    dest = out_dir / "entry.png"
+    source = _HERE / "art.png"
+    output_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
+    destination = output_dir / "entry.png"
 
-    # First copy: the deliverable.
-    size, digest = copier.copy_entry(source, dest)
-    assert copier.verify_entry(dest, size, digest), "entry.png failed verification"
+    size, digest = copier.copy_verified(source, destination)
+    assert copier.matches(destination, size, digest), (
+        "entry.png failed verification after the first copy"
+    )
+    width, height = png_size(destination)
 
-    # The deliverable must also be a 1024x1024 PNG, checked by header.
-    width, height = verify_dimensions(dest)
-
-    # Second copy to a temp name: hashes must match the first run.
-    repeat = out_dir / "entry.repeat.tmp.png"
-    size2, digest2 = copier.copy_entry(source, repeat)
-    assert (size2, digest2) == (size, digest), "repeat copy differs"
-    assert copier.verify_entry(repeat, size, digest), "repeat copy failed verification"
+    # A second copy to a temporary sibling proves the process is
+    # deterministic: same size, same digest, same verification.
+    repeat = output_dir / "entry.repeat.tmp.png"
+    repeat_size, repeat_digest = copier.copy_verified(source, repeat)
+    assert (repeat_size, repeat_digest) == (size, digest), (
+        "repeat copy diverged from the first copy"
+    )
+    assert copier.matches(repeat, size, digest), (
+        "repeat copy failed verification"
+    )
     repeat.unlink()
 
-    print(f"entry.png: {size} bytes sha256={digest[:16]}… verified, {width}x{height}")
+    print(f"entry.png: {size} bytes, {width}x{height}, sha256 {digest[:16]}")
 
 
 if __name__ == "__main__":

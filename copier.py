@@ -1,39 +1,54 @@
-"""Copy helper for the news-image entry.
+"""Verified copying for the shipped front-page image.
 
-The entry image is shipped in the repository as data (``art.png``).
-This module copies it to the output location and proves, by size
-and SHA-256, that the bytes written are exactly the bytes shipped.
-Only the Python standard library is used.
+This helper moves the finished page image to its destination and
+proves the copy is byte-for-byte identical to the source. Identity
+is established two ways: the transferred byte count must match the
+source length, and the SHA-256 digest of the written bytes must
+match the digest computed from the source bytes.
 """
+
+from __future__ import annotations
 
 import hashlib
 from pathlib import Path
 
 
-def sha256_of(data: bytes) -> str:
-    """Return the hex SHA-256 digest of *data*."""
+def digest_of(data: bytes) -> str:
+    """Return the SHA-256 hex digest of *data*."""
     return hashlib.sha256(data).hexdigest()
 
 
-def copy_entry(source: Path, dest: Path) -> tuple[int, str]:
-    """Copy *source* to *dest*, creating parent directories.
+def copy_verified(source, dest) -> tuple[int, str]:
+    """Copy *source* to *dest*, returning (byte count, digest).
 
-    Returns a ``(size, sha256)`` tuple describing the bytes copied,
-    so callers can verify the copy without re-reading the source.
+    The parent directories of *dest* are created when needed. The
+    digest is taken from the source bytes before they are written,
+    so callers can later compare a file on disk against it.
     """
-    data = source.read_bytes()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
-    return len(data), sha256_of(data)
+    src_path = Path(source)
+    dst_path = Path(dest)
+
+    payload = src_path.read_bytes()
+    digest = digest_of(payload)
+
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    dst_path.write_bytes(payload)
+
+    return len(payload), digest
 
 
-def verify_entry(path: Path, expected_size: int, expected_sha256: str) -> bool:
-    """Re-read *path* and check its size and SHA-256.
+def matches(path, size, digest) -> bool:
+    """Check that *path* holds exactly *size* bytes with *digest*.
 
-    Returns True only when both the byte count and the digest of
-    the file on disk match the expected values exactly.
+    Returns True only when the file exists, its length equals
+    *size*, and its SHA-256 hex digest equals *digest*. A missing
+    file is simply a mismatch, not an error.
     """
-    if not path.is_file():
+    candidate = Path(path)
+    if not candidate.is_file():
         return False
-    data = path.read_bytes()
-    return len(data) == expected_size and sha256_of(data) == expected_sha256
+
+    contents = candidate.read_bytes()
+    if len(contents) != size:
+        return False
+    return digest_of(contents) == digest
